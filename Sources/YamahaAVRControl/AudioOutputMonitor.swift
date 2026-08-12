@@ -14,7 +14,7 @@ final class AudioOutputMonitor {
 
     var onDefaultOutputChanged: ((AudioDevice?) -> Void)?
 
-    private let systemObjectID = kAudioObjectSystemObject
+    private let systemObjectID = AudioObjectID(kAudioObjectSystemObject)
     private var listenerBlock: AudioObjectPropertyListenerBlock?
 
     init() {

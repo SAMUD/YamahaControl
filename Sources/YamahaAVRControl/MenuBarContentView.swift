@@ -11,7 +11,9 @@ struct MenuBarContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            if settings.avrHost.isEmpty {
+            if settings.demoModeEnabled {
+                controlsView
+            } else if settings.avrHost.isEmpty {
                 emptyHostPrompt
             } else if !controller.isReachable {
                 unreachableView
@@ -48,7 +50,7 @@ struct MenuBarContentView: View {
             .frame(width: 30, height: 30)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Yamaha AVR")
+                Text(settings.demoModeEnabled ? "Yamaha AVR · Demo" : "Yamaha AVR")
                     .font(.system(size: 13, weight: .semibold))
                 Text(statusText)
                     .font(.system(size: 11))
@@ -65,6 +67,9 @@ struct MenuBarContentView: View {
     }
 
     private var statusText: String {
+        if settings.demoModeEnabled {
+            return controller.status?.power == "on" ? (controller.status?.inputText ?? "Eingeschaltet") : "Standby"
+        }
         guard !settings.avrHost.isEmpty else { return "Nicht eingerichtet" }
         guard controller.isReachable else { return "Nicht erreichbar" }
         if controller.status?.power == "on" {
@@ -134,7 +139,7 @@ struct MenuBarContentView: View {
             powerRow
             volumeSection
 
-            if !settings.favoriteInputs.isEmpty {
+            if !settings.favoriteInputs.isEmpty || !controller.availableInputs.isEmpty {
                 inputSection
             }
 
@@ -214,29 +219,55 @@ struct MenuBarContentView: View {
 
     private var inputSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("Quelle")
-            HStack(spacing: 6) {
-                ForEach(settings.favoriteInputs, id: \.self) { input in
-                    let selected = controller.status?.input == input
-                    Button {
-                        controller.selectInput(input)
-                    } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: inputIcon(for: input))
-                                .font(.system(size: 15))
-                            Text(inputLabel(input))
-                                .font(.system(size: 9))
-                                .lineLimit(1)
+            HStack {
+                sectionHeader("Quelle")
+                Spacer()
+                if !controller.availableInputs.isEmpty {
+                    Menu {
+                        ForEach(controller.availableInputs, id: \.self) { input in
+                            Button {
+                                controller.selectInput(input)
+                            } label: {
+                                if controller.status?.input == input {
+                                    Label(inputLabel(input), systemImage: "checkmark")
+                                } else {
+                                    Text(inputLabel(input))
+                                }
+                            }
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                    } label: {
+                        Label("Alle", systemImage: "list.bullet")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                    .background(
-                        selected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+            }
+            if !settings.favoriteInputs.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(settings.favoriteInputs, id: \.self) { input in
+                        let selected = controller.status?.input == input
+                        Button {
+                            controller.selectInput(input)
+                        } label: {
+                            VStack(spacing: 3) {
+                                Image(systemName: inputIcon(for: input))
+                                    .font(.system(size: 15))
+                                Text(inputLabel(input))
+                                    .font(.system(size: 9))
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                        .background(
+                            selected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                    }
                 }
             }
         }

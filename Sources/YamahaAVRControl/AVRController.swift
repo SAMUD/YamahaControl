@@ -20,6 +20,15 @@ final class AVRController: ObservableObject {
     private var pollTask: Task<Void, Never>?
     let settings: SettingsStore
 
+    // MARK: Demo-Modus (simulierter AVR, keine echten Netzwerkaufrufe)
+
+    private var demoPower = true
+    private var demoVolume = 35
+    private var demoMute = false
+    private var demoInput = "net_radio"
+    private var demoPlayback = "play"
+    private var demoStationName = "Demo Radio FM"
+
     var volumePercent: Double {
         guard let status, let volume = status.volume else { return 0 }
         let maxV = status.maxVolume ?? features?.mainVolumeRange?.max ?? 100
@@ -54,6 +63,10 @@ final class AVRController: ObservableObject {
     }
 
     func pollOnce() async {
+        if settings.demoModeEnabled {
+            applyDemoState()
+            return
+        }
         guard !settings.avrHost.isEmpty else {
             isReachable = false
             return
@@ -96,6 +109,65 @@ final class AVRController: ObservableObject {
         await loadFeatures()
     }
 
+    /// Füllt alle veröffentlichten Eigenschaften mit plausiblen Beispieldaten, damit sich die
+    /// komplette UI (Lautstärke, Eingänge, Szenen, Wiedergabe, Presets) ohne echten AVR im
+    /// Netzwerk ansehen und bedienen lässt. Es werden dabei keine HTTP-Anfragen gestellt.
+    private func applyDemoState() {
+        isReachable = true
+        lastErrorMessage = nil
+
+        let inputList = [
+            "hdmi1", "hdmi2", "hdmi3", "hdmi4", "av1", "av2",
+            "net_radio", "bluetooth", "usb", "server", "tuner", "tv", "spotify", "airplay"
+        ]
+        if features == nil {
+            let zone = AVRFeatureZone(
+                id: "main",
+                inputList: inputList,
+                rangeSteps: [VolumeRange(id: "volume", min: 0, max: 100, step: 1)],
+                sceneList: [
+                    AVRScene(str: "Scene_1", text: "Kino"),
+                    AVRScene(str: "Scene_2", text: "Musik")
+                ]
+            )
+            features = AVRFeatures(zone: [zone])
+            availableInputs = inputList
+            scenes = zone.sceneList ?? []
+        }
+        if presets.isEmpty {
+            presets = [
+                AVRPresetEntry(input: "net_radio", text: "Radio Eins", id: 1),
+                AVRPresetEntry(input: "net_radio", text: "Jazz FM", id: 2),
+                AVRPresetEntry(input: "net_radio", text: "Klassik Radio", id: 3)
+            ]
+        }
+
+        status = AVRStatus(
+            power: demoPower ? "on" : "standby",
+            volume: demoVolume,
+            maxVolume: 100,
+            mute: demoMute,
+            input: demoInput,
+            inputText: demoInput.replacingOccurrences(of: "_", with: " ").capitalized,
+            soundProgram: nil
+        )
+
+        if demoPower, playbackCapableInputs.contains(where: { demoInput.contains($0) }) {
+            playInfo = AVRPlayInfo(
+                input: demoInput,
+                playback: demoPlayback,
+                artist: "Demo Artist",
+                album: "Demo Album",
+                track: "Demo Track",
+                station: demoInput == "net_radio" ? demoStationName : nil,
+                albumArtUrl: nil
+            )
+        } else {
+            playInfo = nil
+        }
+        nowPlayingBridge?.update(with: playInfo)
+    }
+
     // MARK: Aktionen
 
     /// Wird von der Audiogeräte-Automatik aufgerufen: AVR einschalten (falls nötig) und danach
@@ -103,6 +175,12 @@ final class AVRController: ObservableObject {
     /// bevor er weitere Befehle zuverlässig annimmt.
     func turnOnAndSelectInput(_ input: String) {
         guard !input.isEmpty else { return }
+        if settings.demoModeEnabled {
+            demoPower = true
+            demoInput = input
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 if status?.power != "on" {
@@ -116,6 +194,11 @@ final class AVRController: ObservableObject {
     }
 
     func togglePower() {
+        if settings.demoModeEnabled {
+            demoPower.toggle()
+            applyDemoState()
+            return
+        }
         let turningOn = !(status?.power == "on")
         Task {
             do {
@@ -129,6 +212,11 @@ final class AVRController: ObservableObject {
         let maxV = status?.maxVolume ?? features?.mainVolumeRange?.max ?? 100
         let clamped = min(max(pct, 0), 1)
         let target = Int((clamped * Double(maxV)).rounded())
+        if settings.demoModeEnabled {
+            demoVolume = target
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 try await client.setVolume(target)
@@ -138,6 +226,11 @@ final class AVRController: ObservableObject {
     }
 
     func toggleMute() {
+        if settings.demoModeEnabled {
+            demoMute.toggle()
+            applyDemoState()
+            return
+        }
         let target = !(status?.mute ?? false)
         Task {
             do {
@@ -148,6 +241,11 @@ final class AVRController: ObservableObject {
     }
 
     func selectInput(_ input: String) {
+        if settings.demoModeEnabled {
+            demoInput = input
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 try await client.setInput(input)
@@ -158,6 +256,11 @@ final class AVRController: ObservableObject {
 
     func recallScene(_ scene: AVRScene) {
         guard let str = scene.str else { return }
+        if settings.demoModeEnabled {
+            demoPower = true
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 try await client.setScene(str)
@@ -167,6 +270,14 @@ final class AVRController: ObservableObject {
     }
 
     func recallPreset(_ num: Int) {
+        if settings.demoModeEnabled {
+            if let preset = presets.first(where: { $0.id == num }), let text = preset.text {
+                demoStationName = text
+            }
+            demoInput = "net_radio"
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 try await client.recallPreset(num)
@@ -176,6 +287,15 @@ final class AVRController: ObservableObject {
     }
 
     func playbackAction(_ action: String) {
+        if settings.demoModeEnabled {
+            switch action {
+            case "play": demoPlayback = "play"
+            case "pause": demoPlayback = "pause"
+            default: break
+            }
+            applyDemoState()
+            return
+        }
         Task {
             do {
                 try await client.setPlayback(action)
@@ -185,7 +305,7 @@ final class AVRController: ObservableObject {
     }
 
     func loadPresetsIfNeeded() {
-        guard presets.isEmpty else { return }
+        guard presets.isEmpty, !settings.demoModeEnabled else { return }
         Task {
             do {
                 let list = try await client.getPresetInfo().presetInfo

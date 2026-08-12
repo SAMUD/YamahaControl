@@ -18,9 +18,11 @@ swift build -c release
 APP_NAME="YamahaAVRControl.app"
 rm -rf "$APP_NAME"
 mkdir -p "$APP_NAME/Contents/MacOS"
+mkdir -p "$APP_NAME/Contents/Resources"
 
 cp ".build/release/YamahaAVRControl" "$APP_NAME/Contents/MacOS/YamahaAVRControl"
 cp "Scripts/Info.plist" "$APP_NAME/Contents/Info.plist"
+cp "Scripts/AppIcon.icns" "$APP_NAME/Contents/Resources/AppIcon.icns"
 
 echo "Fertig: $APP_NAME"
 echo "Weiter mit: open \"$APP_NAME\" oder ins Applications-Verzeichnis verschieben."

@@ -19,7 +19,7 @@ struct YamahaAVRControlApp: App {
 
         // Läuft als reine Menüleisten-App ohne Dock-Icon/Programmwechsler-Eintrag.
         // (Bei Auslieferung als .app-Bundle übernimmt zusätzlich LSUIElement in Info.plist diese Rolle.)
-        NSApp.setActivationPolicy(.accessory)
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     var body: some Scene {

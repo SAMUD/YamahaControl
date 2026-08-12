@@ -11,6 +11,17 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
+                sectionHeader("Demo-Modus")
+                Toggle("Aktiv", isOn: $settings.demoModeEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .font(.system(size: 12))
+                Text("Simuliert einen eingeschalteten AVR mit Beispieldaten, um die Oberfläche ohne echtes Gerät auszuprobieren. Es werden keine echten Befehle gesendet.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 sectionHeader("Verbindung")
                 HStack(spacing: 6) {
                     TextField("IP-Adresse, z. B. 192.168.1.50", text: $hostDraft)

@@ -10,6 +10,8 @@
     <string>YamahaAVRControl</string>
     <key>CFBundleDisplayName</key>
     <string>Yamaha AVR Control</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

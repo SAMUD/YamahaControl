@@ -29,6 +29,12 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(triggerInput, forKey: "triggerInput") }
     }
 
+    /// Simuliert einen verbundenen, eingeschalteten AVR mit Beispieldaten – rein zum Betrachten
+    /// der UI, ohne echtes Gerät im Netzwerk. Es werden dabei keine Netzwerkanfragen gestellt.
+    @Published var demoModeEnabled: Bool {
+        didSet { UserDefaults.standard.set(demoModeEnabled, forKey: "demoModeEnabled") }
+    }
+
     init() {
         avrHost = UserDefaults.standard.string(forKey: "avrHost") ?? ""
         pollIntervalSeconds = UserDefaults.standard.object(forKey: "pollIntervalSeconds") as? Double ?? 5
@@ -38,5 +44,6 @@ final class SettingsStore: ObservableObject {
         triggerEnabled = UserDefaults.standard.bool(forKey: "triggerEnabled")
         triggerDeviceUID = UserDefaults.standard.string(forKey: "triggerDeviceUID") ?? ""
         triggerInput = UserDefaults.standard.string(forKey: "triggerInput") ?? ""
+        demoModeEnabled = UserDefaults.standard.bool(forKey: "demoModeEnabled")
     }
 }
