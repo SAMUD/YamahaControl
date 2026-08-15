@@ -409,15 +409,14 @@ final class AVRController: ObservableObject {
                 // nicht direkt gefunden, probeweise in den ersten Ordner der Ebene absteigen
                 // (typische vTuner-Struktur: Wurzel ▸ "Radio" ▸ "Favoriten").
                 for _ in 0..<3 {
+                    let previousTexts = Set(list.listInfo.compactMap { $0.text })
                     if let favItem = list.listInfo.first(where: { ($0.text ?? "").lowercased().contains("favorit") }) {
                         path.append(favItem.index)
-                        try await client.selectListItem(favItem.index)
-                        list = try await client.getListInfo(input: "net_radio")
+                        list = try await selectAndAwaitContent(favItem.index, previousTexts: previousTexts)
                         break
                     } else if let first = list.listInfo.first {
                         path.append(first.index)
-                        try await client.selectListItem(first.index)
-                        list = try await client.getListInfo(input: "net_radio")
+                        list = try await selectAndAwaitContent(first.index, previousTexts: previousTexts)
                     } else {
                         break
                     }
@@ -437,13 +436,33 @@ final class AVRController: ObservableObject {
         if settings.demoModeEnabled { return }
         Task {
             do {
+                var currentList = try await client.getListInfo(input: "net_radio")
                 for index in netRadioFavoritesPath {
-                    try await client.selectListItem(index)
+                    let previousTexts = Set(currentList.listInfo.compactMap { $0.text })
+                    currentList = try await selectAndAwaitContent(index, previousTexts: previousTexts)
                 }
                 try await client.selectListItem(item.index)
                 await pollOnce()
             } catch { reportError(error) }
         }
+    }
+
+    /// Wählt einen Menüeintrag an und wartet ggf. kurz, bis der AVR den Inhalt der neuen
+    /// Menü-Ebene tatsächlich liefert. Verifiziert an einem echten Gerät: Bei Unterordnern, deren
+    /// Inhalt erst über einen externen Dienst nachgeladen wird (z. B. "Favoriten"), meldet der AVR
+    /// bereits eine neue Ebene, bevor der Inhalt wirklich da ist – eine feste, kurze Pause reicht
+    /// dafür nicht zuverlässig aus. Bricht spätestens nach ~2,8 s ab und gibt den letzten Stand
+    /// zurück, auch wenn der Inhalt sich bis dahin nicht geändert hat.
+    private func selectAndAwaitContent(_ index: Int, previousTexts: Set<String>) async throws -> AVRListInfo {
+        try await client.selectListItem(index)
+        var info = try await client.getListInfo(input: "net_radio")
+        var attempts = 0
+        while attempts < 8, Set(info.listInfo.compactMap { $0.text }) == previousTexts {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            info = try await client.getListInfo(input: "net_radio")
+            attempts += 1
+        }
+        return info
     }
 
     private func reportError(_ error: Error) {
