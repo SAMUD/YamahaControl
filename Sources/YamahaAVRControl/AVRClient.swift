@@ -131,10 +131,22 @@ final class AVRClient {
     /// echten Gerät.
     func selectListItem(_ index: Int, zone: String = "main") async throws {
         try await get("/netusb/setListControl", query: ["list_id": "main", "type": "select", "index": String(index), "zone": zone])
+        await settleAfterListControl()
     }
 
     /// Verlässt die aktuelle Menüebene wieder eine Ebene nach oben.
     func returnList(zone: String = "main") async throws {
         try await get("/netusb/setListControl", query: ["list_id": "main", "type": "return", "index": "0", "zone": zone])
+        await settleAfterListControl()
+    }
+
+    /// Der AVR verarbeitet Menü-Navigationsbefehle (setListControl) intern asynchron und lehnt
+    /// einen weiteren Befehl mit response_code 4 ab, wenn er zu kurz nach dem vorherigen kommt –
+    /// verifiziert an einem echten Gerät (mehrere setListControl-Aufrufe direkt hintereinander
+    /// ohne Pause schlugen fehl, mit ~0,4 s Abstand liefen sie zuverlässig durch). Diese kurze
+    /// Pause ist daher nötig, wenn mehrere Navigationsschritte (z. B. Ordner ▸ Ordner ▸ Sender)
+    /// hintereinander ausgeführt werden.
+    private func settleAfterListControl() async {
+        try? await Task.sleep(nanoseconds: 400_000_000)
     }
 }
