@@ -67,7 +67,7 @@ struct AVRPresetInfo: Codable {
 /// (z. B. Net-Radio-Ordnerstruktur "Radio ▸ Favoriten ▸ <Sender>"). Anders als die klassischen,
 /// nummerierten Presets (AVRPresetEntry/AVRPresetInfo) bildet das die im vTuner-Menü angelegten
 /// Senderfavoriten ab.
-struct AVRListInfo: Codable {
+struct AVRListInfo: Decodable {
     var menuLayer: Int?
     var menuName: String?
     var listInfo: [AVRListItem]
@@ -76,6 +76,18 @@ struct AVRListInfo: Codable {
         case menuLayer = "menu_layer"
         case menuName = "menu_name"
         case listInfo = "list_info"
+    }
+
+    /// Eigene Decodierung, weil der AVR bei einer momentanen Fehlerantwort (z. B. während der
+    /// Inhalt eines Ordners wie "Favoriten" noch über einen externen Dienst nachgeladen wird, mit
+    /// `response_code` ungleich 0) das Feld "list_info" komplett weglässt – verifiziert an einem
+    /// echten Gerät. Ohne diesen Fallback bricht das Decodieren dann ab, statt es einfach als
+    /// "noch keine Daten" zu werten und erneut abzufragen.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        menuLayer = try container.decodeIfPresent(Int.self, forKey: .menuLayer)
+        menuName = try container.decodeIfPresent(String.self, forKey: .menuName)
+        listInfo = try container.decodeIfPresent([AVRListItem].self, forKey: .listInfo) ?? []
     }
 }
 

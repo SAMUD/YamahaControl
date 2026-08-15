@@ -457,7 +457,10 @@ final class AVRController: ObservableObject {
         try await client.selectListItem(index)
         var info = try await client.getListInfo(input: "net_radio")
         var attempts = 0
-        while attempts < 8, Set(info.listInfo.compactMap { $0.text }) == previousTexts {
+        // Sowohl eine (noch) unveränderte Liste als auch eine leere Antwort (der AVR liefert bei
+        // einer momentanen Fehlerantwort während des Nachladens gar keine Einträge) gelten als
+        // "noch nicht bereit" und werden erneut abgefragt.
+        while attempts < 8, info.listInfo.isEmpty || Set(info.listInfo.compactMap { $0.text }) == previousTexts {
             try? await Task.sleep(nanoseconds: 350_000_000)
             info = try await client.getListInfo(input: "net_radio")
             attempts += 1
