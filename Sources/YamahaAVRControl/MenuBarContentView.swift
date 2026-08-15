@@ -31,7 +31,13 @@ struct MenuBarContentView: View {
         }
         .padding(16)
         .frame(width: 300)
-        .onAppear { volumeSlider = controller.volumePercent }
+        .onAppear {
+            volumeSlider = controller.volumePercent
+            // Sofort aktualisieren statt auf den nächsten periodischen Poll zu warten – sonst
+            // kann das Flyout kurz nach dem Öffnen noch den letzten (u. U. veralteten) Stand
+            // zeigen, z. B. wenn der Eingang zwischenzeitlich direkt am Gerät gewechselt wurde.
+            Task { await controller.pollOnce() }
+        }
         .onChange(of: controller.volumePercent) { newValue in
             if !isDraggingVolume { volumeSlider = newValue }
         }
@@ -193,18 +199,18 @@ struct MenuBarContentView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(controller.status?.mute == true ? Color.red : Color.primary)
 
-                Slider(
-                    value: Binding(
-                        get: { volumeSlider },
-                        set: { newValue in
-                            volumeSlider = newValue
-                            controller.setVolumePercent(newValue)
-                        }
-                    ),
-                    in: 0...sliderUpperBound,
-                    onEditingChanged: { editing in isDraggingVolume = editing }
+                VolumeSliderControl(
+                    value: $volumeSlider,
+                    range: 0...sliderUpperBound,
+                    onEditingChanged: { editing in isDraggingVolume = editing },
+                    onChange: { newValue in
+                        controller.setVolumePercent(newValue)
+                    },
+                    onCommit: { newValue in
+                        controller.setVolumePercent(newValue, immediate: true)
+                    }
                 )
-                .tint(.accentColor)
+                .frame(height: 20)
 
                 Text("\(Int(volumeSlider * 100))%")
                     .font(.system(size: 11, design: .rounded))
@@ -278,7 +284,7 @@ struct MenuBarContentView: View {
             sectionHeader("Szenen")
             HStack(spacing: 6) {
                 ForEach(controller.scenes) { scene in
-                    Button(scene.text ?? scene.str ?? "?") {
+                    Button(scene.text) {
                         controller.recallScene(scene)
                     }
                     .buttonStyle(.bordered)
@@ -322,17 +328,30 @@ struct MenuBarContentView: View {
 
             if playInfo.input == "net_radio" {
                 Menu {
-                    ForEach(controller.presets) { preset in
-                        Button(preset.text ?? "Preset \(preset.id)") {
-                            controller.recallPreset(preset.id)
+                    if !configuredPresets.isEmpty {
+                        ForEach(configuredPresets) { preset in
+                            Button(preset.text ?? "Preset \(preset.id)") {
+                                controller.recallPreset(preset.id)
+                            }
                         }
+                    } else if !controller.netRadioFavorites.isEmpty {
+                        ForEach(controller.netRadioFavorites) { item in
+                            Button(item.text ?? "Sender") {
+                                controller.playNetRadioFavorite(item)
+                            }
+                        }
+                    } else {
+                        Text("Keine gespeicherten Sender").foregroundStyle(.secondary)
                     }
                 } label: {
                     Label("Sender wählen", systemImage: "list.bullet")
                         .font(.system(size: 11))
                 }
                 .menuStyle(.borderlessButton)
-                .onAppear { controller.loadPresetsIfNeeded() }
+                .onAppear {
+                    controller.loadPresetsIfNeeded()
+                    controller.loadNetRadioFavoritesIfNeeded()
+                }
             }
         }
         .padding(10)
@@ -341,6 +360,13 @@ struct MenuBarContentView: View {
     }
 
     // MARK: Helpers
+
+    /// Der AVR liefert immer alle (bis zu 40) Preset-Slots, auch unbelegte – die kommen mit
+    /// leerem Text ("") statt gar nicht im Array. Unbelegte Slots werden ausgeblendet, statt sie
+    /// als leere Menüeinträge anzuzeigen.
+    private var configuredPresets: [AVRPresetEntry] {
+        controller.presets.filter { !($0.text ?? "").isEmpty }
+    }
 
     private func sectionHeader(_ text: String) -> some View {
         Text(text.uppercased())

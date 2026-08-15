@@ -85,11 +85,9 @@ final class AVRClient {
         try await get("/\(zone)/setInput", query: ["input": input])
     }
 
-    /// Achtung: Der genaue "setScene"-Endpunkt konnte nicht an einem echten Gerät verifiziert
-    /// werden. Bitte nach der Ersteinrichtung testen; ggf. Pfad/Parameter anhand der Antwort von
-    /// getFeatures (Feld "scene_list") anpassen.
-    func setScene(_ sceneInput: String, zone: String = "main") async throws {
-        try await get("/\(zone)/setScene", query: ["zone": zone, "scene_input": sceneInput])
+    /// Ruft eine gespeicherte Szene ab (1-basierte Nummer). Verifiziert an einem echten RX-A2070.
+    func recallScene(_ num: Int, zone: String = "main") async throws {
+        try await get("/\(zone)/recallScene", query: ["num": String(num)])
     }
 
     // MARK: NetUSB (Netzwerk-Radio, USB, Server, Bluetooth, Streaming-Dienste)
@@ -108,5 +106,35 @@ final class AVRClient {
 
     func recallPreset(_ num: Int, zone: String = "main") async throws {
         try await get("/netusb/recallPreset", query: ["zone": zone, "num": String(num)])
+    }
+
+    /// Liest einen Ausschnitt des aktuell angezeigten Net-USB-Navigationsmenüs (z. B. Net-Radio-
+    /// Ordnerstruktur). Verifiziert an einem echten RX-A2070: `list_id=main` ist fest, "index" ist
+    /// der erste anzuzeigende Eintrag (0 = von vorn).
+    func getListInfo(input: String, index: Int = 0, size: Int = 8, lang: String = "de") async throws -> AVRListInfo {
+        var info = try await getJSON(
+            "/netusb/getListInfo",
+            query: ["list_id": "main", "input": input, "index": String(index), "size": String(size), "lang": lang],
+            as: AVRListInfo.self
+        )
+        info.listInfo = info.listInfo.enumerated().map { offset, item in
+            var i = item
+            i.index = index + offset
+            return i
+        }
+        return info
+    }
+
+    /// Wählt einen Eintrag der zuletzt per `getListInfo` gelesenen Liste an: Ist der Eintrag ein
+    /// Ordner, navigiert das Gerät hinein; ist es ein abspielbarer Titel/Sender, wird er direkt
+    /// gestartet – das Gerät entscheidet das selbst anhand des Eintrags, verifiziert an einem
+    /// echten Gerät.
+    func selectListItem(_ index: Int, zone: String = "main") async throws {
+        try await get("/netusb/setListControl", query: ["list_id": "main", "type": "select", "index": String(index), "zone": zone])
+    }
+
+    /// Verlässt die aktuelle Menüebene wieder eine Ebene nach oben.
+    func returnList(zone: String = "main") async throws {
+        try await get("/netusb/setListControl", query: ["list_id": "main", "type": "return", "index": "0", "zone": zone])
     }
 }

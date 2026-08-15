@@ -12,12 +12,28 @@ final class AVRController: ObservableObject {
     @Published var availableInputs: [String] = []
     @Published var scenes: [AVRScene] = []
     @Published var presets: [AVRPresetEntry] = []
+    /// Im Net-Radio-Menü des AVR unter "Radio ▸ Favoriten" (bzw. "Radio ▸ Favorites") angelegte
+    /// Sender – anders als `presets`, die klassischen nummerierten Preset-Speicherplätze, die
+    /// separat (und oft ungenutzt) existieren.
+    @Published var netRadioFavorites: [AVRListItem] = []
     @Published var lastErrorMessage: String?
+
+    /// Abfolge von Listen-Indizes, mit der man vom Menü-Wurzelverzeichnis aus zum zuletzt
+    /// gefundenen Favoriten-Ordner navigiert (z. B. [0, 0] für "Radio" ▸ "Favoriten"). Wird beim
+    /// Abspielen eines Favoriten erneut durchlaufen, weil die Navigation zwischenzeitlich wieder
+    /// auf die Wurzel zurückgesetzt wird.
+    private var netRadioFavoritesPath: [Int] = []
+    private var isLoadingNetRadioFavorites = false
 
     var nowPlayingBridge: NowPlayingBridge?
 
     private var client: AVRClient
     private var pollTask: Task<Void, Never>?
+    private var volumeSendTask: Task<Void, Never>?
+    /// Anzahl aufeinanderfolgender fehlgeschlagener Abfragen. Erst nach mehreren Fehlschlägen in
+    /// Folge wird "nicht erreichbar" angezeigt, damit ein einzelner verlorener Request (z. B.
+    /// während der AVR gerade eine andere Anfrage verarbeitet) nicht sofort zum Flackern führt.
+    private var consecutiveFailures = 0
     let settings: SettingsStore
 
     // MARK: Demo-Modus (simulierter AVR, keine echten Netzwerkaufrufe)
@@ -31,7 +47,7 @@ final class AVRController: ObservableObject {
 
     var volumePercent: Double {
         guard let status, let volume = status.volume else { return 0 }
-        let maxV = status.maxVolume ?? features?.mainVolumeRange?.max ?? 100
+        let maxV = status.maxVolume ?? Int(features?.mainVolumeRange?.max ?? 100)
         guard maxV > 0 else { return 0 }
         return Double(volume) / Double(maxV)
     }
@@ -75,21 +91,35 @@ final class AVRController: ObservableObject {
             let s = try await client.getStatus()
             status = s
             isReachable = true
+            consecutiveFailures = 0
             lastErrorMessage = nil
 
-            if features == nil {
+            // Solange keine Eingänge/Szenen bekannt sind, bei jedem Poll erneut versuchen – ein
+            // einzelner fehlgeschlagener oder unvollständiger getFeatures-Aufruf (z. B. kurz nach
+            // dem Einschalten) darf die Favoriten/Szenen nicht dauerhaft leer lassen.
+            if features == nil || availableInputs.isEmpty {
                 await loadFeatures()
             }
 
             if let input = s.input, playbackCapableInputs.contains(where: { input.contains($0) }) {
                 playInfo = try? await client.getPlayInfo()
+                if input.contains("net_radio") {
+                    loadPresetsIfNeeded()
+                    loadNetRadioFavoritesIfNeeded()
+                }
             } else {
                 playInfo = nil
             }
             nowPlayingBridge?.update(with: playInfo)
         } catch {
-            isReachable = false
-            playInfo = nil
+            consecutiveFailures += 1
+            // Erst nach zwei Fehlschlägen in Folge als "nicht erreichbar" melden, um Flackern bei
+            // vereinzelten Timeouts (z. B. während der AVR gerade eine Lautstärkeänderung verarbeitet)
+            // zu vermeiden.
+            if consecutiveFailures >= 2 {
+                isReachable = false
+                playInfo = nil
+            }
         }
     }
 
@@ -97,10 +127,19 @@ final class AVRController: ObservableObject {
         do {
             let f = try await client.getFeatures()
             features = f
-            availableInputs = f.mainZone?.inputList ?? []
-            scenes = f.mainZone?.sceneList ?? []
+            // Fallback auf die erste Zone, falls das Gerät keine Zone mit id == "main" meldet.
+            let zone = f.mainZone ?? f.zone?.first
+            availableInputs = zone?.inputList ?? []
+
+            if let count = zone?.sceneNum, count > 0 {
+                // Auf 4 begrenzt: entspricht den dedizierten SCENE-Tasten auf Fernbedienung/Gerät,
+                // auch wenn das Gerät intern mehr Szenen-Speicherplätze unterstützt (scene_num).
+                scenes = (1...min(count, 4)).map { AVRScene(num: $0, text: "Szene \($0)") }
+            } else {
+                scenes = []
+            }
         } catch {
-            // Optionale Zusatzinfos – kein Abbruch, falls das Gerät getFeatures nicht liefert.
+            FileHandle.standardError.write(Data("YamahaAVRControl: getFeatures fehlgeschlagen: \(error)\n".utf8))
         }
     }
 
@@ -125,14 +164,14 @@ final class AVRController: ObservableObject {
                 id: "main",
                 inputList: inputList,
                 rangeSteps: [VolumeRange(id: "volume", min: 0, max: 100, step: 1)],
-                sceneList: [
-                    AVRScene(str: "Scene_1", text: "Kino"),
-                    AVRScene(str: "Scene_2", text: "Musik")
-                ]
+                sceneNum: 4
             )
             features = AVRFeatures(zone: [zone])
             availableInputs = inputList
-            scenes = zone.sceneList ?? []
+            scenes = [
+                AVRScene(num: 1, text: "Kino"),
+                AVRScene(num: 2, text: "Musik")
+            ]
         }
         if presets.isEmpty {
             presets = [
@@ -174,10 +213,9 @@ final class AVRController: ObservableObject {
     /// auf den angegebenen Eingang wechseln. Der AVR braucht nach dem Einschalten kurz Zeit,
     /// bevor er weitere Befehle zuverlässig annimmt.
     func turnOnAndSelectInput(_ input: String) {
-        guard !input.isEmpty else { return }
         if settings.demoModeEnabled {
             demoPower = true
-            demoInput = input
+            if !input.isEmpty { demoInput = input }
             applyDemoState()
             return
         }
@@ -187,7 +225,27 @@ final class AVRController: ObservableObject {
                     try await client.setPower(true)
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                 }
-                try await client.setInput(input)
+                // Eingang ist optional: Wenn in den Einstellungen keiner gewählt wurde, soll die
+                // Automatik den AVR trotzdem einschalten, statt komplett zu nichts zu tun.
+                if !input.isEmpty {
+                    try await client.setInput(input)
+                }
+                await pollOnce()
+            } catch { reportError(error) }
+        }
+    }
+
+    /// Wird von der Audiogeräte-Automatik beim Schlafengehen des Mac aufgerufen.
+    func turnOff() {
+        if settings.demoModeEnabled {
+            demoPower = false
+            applyDemoState()
+            return
+        }
+        guard status?.power == "on" else { return }
+        Task {
+            do {
+                try await client.setPower(false)
                 await pollOnce()
             } catch { reportError(error) }
         }
@@ -208,8 +266,14 @@ final class AVRController: ObservableObject {
         }
     }
 
-    func setVolumePercent(_ pct: Double) {
-        let maxV = status?.maxVolume ?? features?.mainVolumeRange?.max ?? 100
+    /// Wird bei jeder Reglerbewegung aufgerufen. Sendet nicht bei jedem einzelnen Pixel-Schritt
+    /// sofort eine Netzwerkanfrage (das überlastet den AVR beim Ziehen und führt zu Timeouts /
+    /// Race-Conditions zwischen mehreren gleichzeitigen Anfragen, was den Regler hin- und
+    /// herspringen lässt), sondern verwirft eine bereits wartende Anfrage und startet danach eine
+    /// neue, leicht verzögerte. `immediate: true` (z. B. beim Loslassen des Reglers oder per
+    /// Mausrad) sendet sofort.
+    func setVolumePercent(_ pct: Double, immediate: Bool = false) {
+        let maxV = status?.maxVolume ?? Int(features?.mainVolumeRange?.max ?? 100)
         let clamped = min(max(pct, 0), 1)
         let target = Int((clamped * Double(maxV)).rounded())
         if settings.demoModeEnabled {
@@ -217,11 +281,20 @@ final class AVRController: ObservableObject {
             applyDemoState()
             return
         }
-        Task {
+        volumeSendTask?.cancel()
+        volumeSendTask = Task { [weak self] in
+            guard let self else { return }
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 90_000_000)
+                if Task.isCancelled { return }
+            }
             do {
-                try await client.setVolume(target)
-                await pollOnce()
-            } catch { reportError(error) }
+                try await self.client.setVolume(target)
+                if Task.isCancelled { return }
+                await self.pollOnce()
+            } catch {
+                if !Task.isCancelled { self.reportError(error) }
+            }
         }
     }
 
@@ -255,7 +328,6 @@ final class AVRController: ObservableObject {
     }
 
     func recallScene(_ scene: AVRScene) {
-        guard let str = scene.str else { return }
         if settings.demoModeEnabled {
             demoPower = true
             applyDemoState()
@@ -263,7 +335,7 @@ final class AVRController: ObservableObject {
         }
         Task {
             do {
-                try await client.setScene(str)
+                try await client.recallScene(scene.num)
                 await pollOnce()
             } catch { reportError(error) }
         }
@@ -315,8 +387,62 @@ final class AVRController: ObservableObject {
                     return e
                 }
             } catch {
-                // Presets sind optional – still fehlschlagen.
+                FileHandle.standardError.write(Data("YamahaAVRControl: getPresetInfo fehlgeschlagen: \(error)\n".utf8))
             }
+        }
+    }
+
+    /// Sucht im Net-Radio-Menü nach einem Ordner "Favoriten"/"Favorites" (unabhängig von der
+    /// Geräte-/Menüsprache) und listet dessen Inhalt. Verifiziert an einem echten RX-A2070: Die
+    /// Favoriten liegen dort unter "Radio ▸ Favoriten", nicht in den klassischen Presets.
+    /// Navigiert danach zurück zur Menü-Wurzel, damit der Gerätezustand unverändert bleibt (z. B.
+    /// falls gerade jemand am Gerät selbst im Menü unterwegs ist).
+    func loadNetRadioFavoritesIfNeeded() {
+        guard netRadioFavorites.isEmpty, !isLoadingNetRadioFavorites, !settings.demoModeEnabled else { return }
+        isLoadingNetRadioFavorites = true
+        Task {
+            defer { isLoadingNetRadioFavorites = false }
+            do {
+                var path: [Int] = []
+                var list = try await client.getListInfo(input: "net_radio")
+                // Bis zu drei Ebenen tief nach einem Ordner mit "favorit" im Namen suchen; wird er
+                // nicht direkt gefunden, probeweise in den ersten Ordner der Ebene absteigen
+                // (typische vTuner-Struktur: Wurzel ▸ "Radio" ▸ "Favoriten").
+                for _ in 0..<3 {
+                    if let favItem = list.listInfo.first(where: { ($0.text ?? "").lowercased().contains("favorit") }) {
+                        path.append(favItem.index)
+                        try await client.selectListItem(favItem.index)
+                        list = try await client.getListInfo(input: "net_radio")
+                        break
+                    } else if let first = list.listInfo.first {
+                        path.append(first.index)
+                        try await client.selectListItem(first.index)
+                        list = try await client.getListInfo(input: "net_radio")
+                    } else {
+                        break
+                    }
+                }
+                netRadioFavoritesPath = path
+                netRadioFavorites = list.listInfo
+                for _ in 0..<(list.menuLayer ?? path.count) {
+                    try? await client.returnList()
+                }
+            } catch {
+                FileHandle.standardError.write(Data("YamahaAVRControl: Net-Radio-Favoriten laden fehlgeschlagen: \(error)\n".utf8))
+            }
+        }
+    }
+
+    func playNetRadioFavorite(_ item: AVRListItem) {
+        if settings.demoModeEnabled { return }
+        Task {
+            do {
+                for index in netRadioFavoritesPath {
+                    try await client.selectListItem(index)
+                }
+                try await client.selectListItem(item.index)
+                await pollOnce()
+            } catch { reportError(error) }
         }
     }
 

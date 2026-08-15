@@ -58,43 +58,55 @@ einstellbar) die Erreichbarkeit des AVR und zeigt Status/Bedienung im Flyout.
 ## Bedienung im Flyout
 
 - **Ein/Aus**: Schalter oben.
-- **Lautstärke**: Schieberegler, Lautsprecher-Symbol daneben schaltet stumm. Der
-  Regler hat eine einstellbare Sicherheits-Obergrenze (Standard 70 %) – ein
-  versehentlicher Klick neben den Regler kann die Lautstärke dadurch nie auf
-  100 % springen lassen. Einstellbar unter „Einstellungen ▸ Lautstärke-Sicherheit“.
+- **Lautstärke**: Schieberegler, Lautsprecher-Symbol daneben schaltet stumm. Lässt
+  sich per Ziehen oder per Mausrad/Trackpad-Scroll direkt über dem Regler bedienen.
+  Der Regler hat eine einstellbare Sicherheits-Obergrenze (Standard 70 %) – ein
+  versehentlicher Klick daneben kann die Lautstärke dadurch nie auf 100 % springen
+  lassen. Einstellbar unter „Einstellungen ▸ Lautstärke-Sicherheit“.
 - **Quellen**: bis zu vier Favoriten, wählbar in den Einstellungen (Liste wird
   automatisch vom AVR geladen).
-- **Szenen**: erscheinen automatisch, wenn der AVR entsprechende Szenen meldet
-  (siehe Hinweis unten).
+- **Szenen**: bis zu vier Szenen-Tasten, sobald der AVR programmierte Szenen
+  meldet. Die YXC-API liefert dazu keine Namen, daher erscheinen sie als
+  „Szene 1“–„Szene 4“ (entspricht den SCENE-Tasten auf Fernbedienung/Gerät).
 - **Wiedergabe**: Bei Netzwerk-Radio/USB/Bluetooth/Streaming werden Titel/Sender
-  sowie Zurück/Play-Pause/Weiter angezeigt; bei Netzwerk-Radio zusätzlich ein
-  Menü zum direkten Anwählen der auf dem Receiver gespeicherten Sender-Presets.
+  sowie Zurück/Play-Pause/Weiter angezeigt. Bei Netzwerk-Radio zusätzlich ein Menü
+  zum direkten Anwählen gespeicherter Sender – dabei werden sowohl klassische,
+  nummerierte Presets als auch im Receiver-Menü unter „Radio ▸ Favoriten“ angelegte
+  Senderfavoriten unterstützt (je nachdem, welche davon belegt sind).
 
-## Automatisch einschalten bei Audiogerätewechsel
+## Automatisch einschalten/ausschalten bei Audiogerätewechsel
 
 In den Einstellungen ▸ „Automatisch einschalten“ lässt sich ein macOS-Audioausgabe­gerät
 auswählen (z. B. wenn der AVR selbst als AirPlay-2-, USB- oder HDMI-Ziel im
 Lautsprecher-Menü von macOS erscheint) sowie ein Ziel-Eingang. Stellst du am Mac
 dieses Gerät als Standard-Audioausgabe ein, schaltet die App den AVR automatisch
 ein und wechselt auf den gewählten Eingang – auch wenn das Gerät bereits beim
-App-Start aktiv ist. Die Erkennung läuft über CoreAudio
+App-Start aktiv ist oder der Mac gerade erst aus dem Ruhezustand aufwacht. Geht
+der Mac in den Ruhezustand, während der AVR auf genau diesem Eingang steht,
+schaltet die App ihn automatisch wieder aus. Die Erkennung läuft über CoreAudio
 ([AudioOutputMonitor.swift](Sources/YamahaAVRControl/AudioOutputMonitor.swift))
 und reagiert auf Änderungen der macOS-Standardausgabe, nicht auf Anwesenheit im
 Netzwerk – das Zielgerät muss also tatsächlich in der macOS-Geräteliste als
 Audioausgabe wählbar sein.
 
-## Bekannte Einschränkung: Szenen-Button
+## Hinweise zur YXC-API
 
-Der genaue API-Aufruf für die vier Szenen-Tasten der Fernbedienung
-(`setScene`) ist über die öffentlich dokumentierte MusicCast-API nicht an einem
-echten Gerät verifiziert und daher die unsicherste Stelle im Code
-([AVRClient.swift](Sources/YamahaAVRControl/AVRClient.swift)). Sollte der
-Button nicht funktionieren: Im Browser `http://<AVR-IP>/YamahaExtendedControl/v1/system/getFeatures`
-öffnen, im JSON unter `zone` ▸ `scene_list` nachsehen, welche Werte der
-Receiver tatsächlich zurückgibt, und den Endpunkt/die Parameter in
-`setScene(...)` entsprechend anpassen. Alle anderen Endpunkte (Status,
-Lautstärke, Power, Eingang, Netzwerk-Radio, Presets) basieren auf der breit
-dokumentierten und stabilen YXC-API und sollten direkt funktionieren.
+Alle Endpunkte in [AVRClient.swift](Sources/YamahaAVRControl/AVRClient.swift)
+sind an einem echten RX-A2070 verifiziert, u. a.:
+
+- **Szenen** werden über `GET /<zone>/recallScene?num=<1-basierte Nummer>`
+  aufgerufen. Die YXC-API liefert dazu keine Namen – die Anzahl programmierter
+  Szenen (`scene_num` aus `getFeatures`) wird daher clientseitig als „Szene 1“
+  bis „Szene 4“ dargestellt.
+- **Netzwerk-Radio-Favoriten**: Klassische, nummerierte Presets
+  (`netusb/getPresetInfo`) und im Receiver-Menü unter „Radio ▸ Favoriten“
+  angelegte Senderfavoriten sind zwei getrennte Systeme. Letztere liegen nicht
+  in einer flachen Liste, sondern in der Menü-Navigationsstruktur
+  (`netusb/getListInfo` / `netusb/setListControl`) – die App sucht darin
+  automatisch (sprachunabhängig) nach einem Ordner mit „favorit“ im Namen.
+  Sollte sich die Menüstruktur deines Receivers/Anbieters unterscheiden, im
+  Browser `http://<AVR-IP>/YamahaExtendedControl/v1/netusb/getListInfo?list_id=main&input=net_radio&index=0&size=8&lang=de`
+  öffnen, um die tatsächliche Struktur zu sehen.
 
 ## Alternative bzw. ergänzende Steuerungsmöglichkeiten unter macOS
 
@@ -141,7 +153,8 @@ Sources/YamahaAVRControl/
   SettingsStore.swift             Gespeicherte Einstellungen (UserDefaults)
   NowPlayingBridge.swift          Control-Center „Jetzt läuft“ + Medientasten
   AudioOutputMonitor.swift        CoreAudio: aktuelles macOS-Standardausgabegerät
-  AudioTriggerController.swift    AVR an + Eingang wählen bei Audiogerätewechsel
+  AudioTriggerController.swift    AVR an/aus bei Audiogerätewechsel bzw. Mac-Schlaf
+  VolumeSliderControl.swift       Lautstärkeregler (NSSlider) mit Mausrad-Unterstützung
   MenuBarIconView.swift           Menüleisten-Icon
   MenuBarContentView.swift        Flyout-Inhalt
   SettingsView.swift              Einstellungen im Flyout

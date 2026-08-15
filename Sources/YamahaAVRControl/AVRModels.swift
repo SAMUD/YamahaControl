@@ -63,32 +63,70 @@ struct AVRPresetInfo: Codable {
     }
 }
 
-struct AVRScene: Codable, Identifiable, Hashable {
-    /// Wert, der 1:1 als "scene_input"-Parameter an setScene geschickt wird (z.B. "Scene_1").
-    var str: String?
-    var text: String?
+/// Antwort von "netusb/getListInfo": ein Ausschnitt des aktuell angezeigten Navigationsmenüs
+/// (z. B. Net-Radio-Ordnerstruktur "Radio ▸ Favoriten ▸ <Sender>"). Anders als die klassischen,
+/// nummerierten Presets (AVRPresetEntry/AVRPresetInfo) bildet das die im vTuner-Menü angelegten
+/// Senderfavoriten ab.
+struct AVRListInfo: Codable {
+    var menuLayer: Int?
+    var menuName: String?
+    var listInfo: [AVRListItem]
 
-    var id: String { str ?? text ?? UUID().uuidString }
+    enum CodingKeys: String, CodingKey {
+        case menuLayer = "menu_layer"
+        case menuName = "menu_name"
+        case listInfo = "list_info"
+    }
+}
+
+struct AVRListItem: Codable, Identifiable {
+    var text: String?
+    /// Position innerhalb der aktuellen Liste – wird nach dem Decodieren aus der Array-Position
+    /// gesetzt, da die API selbst keinen Index pro Eintrag mitliefert. Bewusst nicht in
+    /// CodingKeys, sonst versucht der Decoder ein nicht existierendes "index"-Feld aus der
+    /// JSON-Antwort zu lesen und bricht für jeden Listeneintrag ab.
+    var index: Int = 0
+
+    enum CodingKeys: String, CodingKey {
+        case text
+    }
+
+    var id: Int { index }
+}
+
+/// Szene, wie sie in der App angezeigt wird. Die YXC-API liefert (jedenfalls auf am RX-A2070
+/// verifizierten Firmwareständen) keine benannten Szenen über getFeatures, nur die Anzahl
+/// (`scene_num`) – die Buttons werden daher clientseitig als "Szene 1".."Szene N" erzeugt und per
+/// Nummer über `recallScene?num=N` aufgerufen (verifiziert an einem echten Gerät).
+struct AVRScene: Identifiable, Hashable {
+    var num: Int
+    var text: String
+
+    var id: Int { num }
 }
 
 struct VolumeRange: Codable {
     var id: String?
-    var min: Int?
-    var max: Int?
-    var step: Int?
+    // Als Double, weil der AVR im "range_step"-Array auch Nicht-Lautstärke-Einträge liefert
+    // (z. B. "actual_volume_db" mit min -80.5/max 16.5/step 0.5) – mit Int schlug das komplette
+    // Decodieren von getFeatures bisher fehl, wodurch Eingänge/Szenen nie geladen wurden.
+    var min: Double?
+    var max: Double?
+    var step: Double?
 }
 
 struct AVRFeatureZone: Codable {
     var id: String?
     var inputList: [String]?
     var rangeSteps: [VolumeRange]?
-    var sceneList: [AVRScene]?
+    /// Anzahl fest programmierter Szenen am Gerät (die YXC-API liefert dazu keine Namen).
+    var sceneNum: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
         case inputList = "input_list"
         case rangeSteps = "range_step"
-        case sceneList = "scene_list"
+        case sceneNum = "scene_num"
     }
 }
 
