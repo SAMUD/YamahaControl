@@ -125,19 +125,42 @@ final class AVRClient {
         return info
     }
 
-    /// Wählt einen Eintrag der zuletzt per `getListInfo` gelesenen Liste an: Ist der Eintrag ein
-    /// Ordner, navigiert das Gerät hinein; ist es ein abspielbarer Titel/Sender, wird er direkt
-    /// gestartet – das Gerät entscheidet das selbst anhand des Eintrags, verifiziert an einem
-    /// echten Gerät.
-    func selectListItem(_ index: Int, zone: String = "main") async throws {
-        try await get("/netusb/setListControl", query: ["list_id": "main", "type": "select", "index": String(index), "zone": zone])
+    /// Navigiert in einen Ordner der zuletzt per `getListInfo` gelesenen Liste hinein. Startet
+    /// AUSDRÜCKLICH KEINE Wiedergabe, auch nicht bei einem abspielbaren Titel/Sender – dafür gibt
+    /// es `playListItem`. `setListControl` kennt laut Yamaha-API drei "type"-Werte: "select"
+    /// (navigieren), "play" (wiedergeben) und "return" (zurück) – zunächst wurde hier fälschlich
+    /// überall "select" verwendet, wodurch der Sender-Wechsel zwar "erfolgreich" (response_code 0)
+    /// aber wirkungslos blieb.
+    @discardableResult
+    func selectListItem(_ index: Int, zone: String = "main") async throws -> Int {
+        let data = try await get("/netusb/setListControl", query: ["list_id": "main", "type": "select", "index": String(index), "zone": zone])
         await settleAfterListControl()
+        return responseCode(from: data)
+    }
+
+    /// Startet die Wiedergabe eines abspielbaren Eintrags (Titel/Sender) der zuletzt per
+    /// `getListInfo` gelesenen Liste.
+    @discardableResult
+    func playListItem(_ index: Int, zone: String = "main") async throws -> Int {
+        let data = try await get("/netusb/setListControl", query: ["list_id": "main", "type": "play", "index": String(index), "zone": zone])
+        await settleAfterListControl()
+        return responseCode(from: data)
     }
 
     /// Verlässt die aktuelle Menüebene wieder eine Ebene nach oben.
-    func returnList(zone: String = "main") async throws {
-        try await get("/netusb/setListControl", query: ["list_id": "main", "type": "return", "index": "0", "zone": zone])
+    @discardableResult
+    func returnList(zone: String = "main") async throws -> Int {
+        let data = try await get("/netusb/setListControl", query: ["list_id": "main", "type": "return", "index": "0", "zone": zone])
         await settleAfterListControl()
+        return responseCode(from: data)
+    }
+
+    private func responseCode(from data: Data) -> Int {
+        struct APIResponse: Decodable {
+            var responseCode: Int
+            enum CodingKeys: String, CodingKey { case responseCode = "response_code" }
+        }
+        return (try? JSONDecoder().decode(APIResponse.self, from: data))?.responseCode ?? -1
     }
 
     /// Der AVR verarbeitet Menü-Navigationsbefehle (setListControl) intern asynchron und lehnt

@@ -24,6 +24,12 @@ final class AVRController: ObservableObject {
     /// auf die Wurzel zurückgesetzt wird.
     private var netRadioFavoritesPath: [Int] = []
     private var isLoadingNetRadioFavorites = false
+    /// True während einer mehrschrittigen Net-Radio-Menü-Navigation (Favoriten laden/abspielen).
+    /// Der AVR scheint HTTP-Anfragen nicht wirklich parallel zu verarbeiten – ein Status-Poll, der
+    /// mitten in die Select-Sequenz platzt, kann dort offenbar Befehle durcheinanderbringen.
+    /// Solange das hier true ist, pausiert der periodische Hintergrund-Poll, damit die Sequenz die
+    /// Verbindung exklusiv für sich hat.
+    private var isNavigatingMenu = false
 
     var nowPlayingBridge: NowPlayingBridge?
 
@@ -87,6 +93,7 @@ final class AVRController: ObservableObject {
             isReachable = false
             return
         }
+        guard !isNavigatingMenu else { return }
         do {
             let s = try await client.getStatus()
             status = s
@@ -146,6 +153,21 @@ final class AVRController: ObservableObject {
     func refreshAll() async {
         await pollOnce()
         await loadFeatures()
+    }
+
+    /// Fragt den Status wiederholt ab (bis zu ~3 s), bis er eine erwartete Änderung wirklich
+    /// zeigt, statt nur einmal direkt nach dem Befehl nachzusehen. Der AVR braucht nach manchen
+    /// Befehlen (z. B. Eingangswechsel mit Relais-/HDMI-Umschaltung) sichtbar einen Moment, bis
+    /// getStatus den neuen Wert zurückliefert – ein einzelner, zu früher Poll zeigte bislang kurz
+    /// noch den alten Stand, der erst beim nächsten periodischen Poll korrigiert wurde.
+    private func pollUntilConfirmed(_ isDone: @escaping (AVRStatus?) -> Bool) async {
+        await pollOnce()
+        var attempts = 0
+        while !isDone(status), attempts < 6 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await pollOnce()
+            attempts += 1
+        }
     }
 
     /// Füllt alle veröffentlichten Eigenschaften mit plausiblen Beispieldaten, damit sich die
@@ -230,8 +252,10 @@ final class AVRController: ObservableObject {
                 // Automatik den AVR trotzdem einschalten, statt komplett zu nichts zu tun.
                 if !input.isEmpty {
                     try await client.setInput(input)
+                    await pollUntilConfirmed { $0?.input == input }
+                } else {
+                    await pollUntilConfirmed { $0?.power == "on" }
                 }
-                await pollOnce()
             } catch { reportError(error) }
         }
     }
@@ -247,7 +271,7 @@ final class AVRController: ObservableObject {
         Task {
             do {
                 try await client.setPower(false)
-                await pollOnce()
+                await pollUntilConfirmed { $0?.power != "on" }
             } catch { reportError(error) }
         }
     }
@@ -262,7 +286,7 @@ final class AVRController: ObservableObject {
         Task {
             do {
                 try await client.setPower(turningOn)
-                await pollOnce()
+                await pollUntilConfirmed { ($0?.power == "on") == turningOn }
             } catch { reportError(error) }
         }
     }
@@ -309,7 +333,7 @@ final class AVRController: ObservableObject {
         Task {
             do {
                 try await client.setMute(target)
-                await pollOnce()
+                await pollUntilConfirmed { ($0?.mute ?? false) == target }
             } catch { reportError(error) }
         }
     }
@@ -323,7 +347,7 @@ final class AVRController: ObservableObject {
         Task {
             do {
                 try await client.setInput(input)
-                await pollOnce()
+                await pollUntilConfirmed { $0?.input == input }
             } catch { reportError(error) }
         }
     }
@@ -401,11 +425,17 @@ final class AVRController: ObservableObject {
     func loadNetRadioFavoritesIfNeeded() {
         guard netRadioFavorites.isEmpty, !isLoadingNetRadioFavorites, !settings.demoModeEnabled else { return }
         isLoadingNetRadioFavorites = true
+        isNavigatingMenu = true
         Task {
-            defer { isLoadingNetRadioFavorites = false }
+            defer {
+                isLoadingNetRadioFavorites = false
+                isNavigatingMenu = false
+            }
             do {
+                netRadioLog("--- Favoriten-Suche gestartet ---")
                 var path: [Int] = []
-                var list = try await client.getListInfo(input: "net_radio")
+                var list = try await returnToNetRadioRoot()
+                netRadioLog("Wurzel: \(describe(list))")
                 // Bis zu drei Ebenen tief nach einem Ordner mit "favorit" im Namen suchen; wird er
                 // nicht direkt gefunden, probeweise in den ersten Ordner der Ebene absteigen
                 // (typische vTuner-Struktur: Wurzel ▸ "Radio" ▸ "Favoriten").
@@ -413,20 +443,26 @@ final class AVRController: ObservableObject {
                     let previousTexts = Set(list.listInfo.compactMap { $0.text })
                     if let favItem = list.listInfo.first(where: { ($0.text ?? "").lowercased().contains("favorit") }) {
                         path.append(favItem.index)
+                        netRadioLog("Wähle Favoriten-Ordner an, Index \(favItem.index) (\(favItem.text ?? "?"))")
                         list = try await selectAndAwaitContent(favItem.index, previousTexts: previousTexts)
+                        netRadioLog("Nach Auswahl: \(describe(list))")
                         break
                     } else if let first = list.listInfo.first {
                         path.append(first.index)
+                        netRadioLog("Steige ab in Index \(first.index) (\(first.text ?? "?"))")
                         list = try await selectAndAwaitContent(first.index, previousTexts: previousTexts)
+                        netRadioLog("Nach Abstieg: \(describe(list))")
                     } else {
                         break
                     }
                 }
                 netRadioFavoritesPath = path
                 netRadioFavorites = list.listInfo
+                netRadioLog("Pfad zu Favoriten: \(path), \(list.listInfo.count) Sender gefunden")
                 for _ in 0..<(list.menuLayer ?? path.count) {
-                    try? await client.returnList()
+                    _ = try? await client.returnList()
                 }
+                netRadioLog("--- Favoriten-Suche beendet, zurück zur Wurzel ---")
             } catch {
                 FileHandle.standardError.write(Data("YamahaAVRControl: Net-Radio-Favoriten laden fehlgeschlagen: \(error)\n".utf8))
             }
@@ -435,16 +471,36 @@ final class AVRController: ObservableObject {
 
     func playNetRadioFavorite(_ item: AVRListItem) {
         if settings.demoModeEnabled { return }
+        isNavigatingMenu = true
         Task {
+            defer { isNavigatingMenu = false }
             do {
-                var currentList = try await client.getListInfo(input: "net_radio")
+                netRadioLog("--- Sender abspielen gestartet: Ziel-Index \(item.index) (\(item.text ?? "?")), Pfad \(netRadioFavoritesPath) ---")
+                var currentList = try await returnToNetRadioRoot()
+                netRadioLog("Wurzel: \(describe(currentList))")
                 for index in netRadioFavoritesPath {
                     let previousTexts = Set(currentList.listInfo.compactMap { $0.text })
+                    netRadioLog("Wähle Index \(index) an")
                     currentList = try await selectAndAwaitContent(index, previousTexts: previousTexts)
+                    netRadioLog("Nach Auswahl: \(describe(currentList))")
                 }
-                try await client.selectListItem(item.index)
+                netRadioLog("Spiele finalen Sender-Index \(item.index) ab")
+                let code = try await client.playListItem(item.index)
+                netRadioLog("  response_code=\(code)")
+                // Mehrfach über einige Sekunden nachschauen statt nur einmal direkt danach – das
+                // Verbinden zu einem Stream braucht spürbar Zeit, ein einzelner sofortiger Check
+                // sagt nichts darüber aus, ob der Wechsel am Ende wirklich ankommt.
+                for i in 0..<6 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    let p = try? await client.getPlayInfo()
+                    netRadioLog("  +\(Double(i + 1) * 0.7)s: artist=\(p?.artist ?? "nil") track=\(p?.track ?? "nil") albumart=\(p?.albumArtUrl ?? "nil") playback=\(p?.playback ?? "nil")")
+                }
                 await pollOnce()
-            } catch { reportError(error) }
+                netRadioLog("--- Sender abspielen beendet ---")
+            } catch {
+                netRadioLog("FEHLER: \(error)")
+                reportError(error)
+            }
         }
     }
 
@@ -455,18 +511,46 @@ final class AVRController: ObservableObject {
     /// dafür nicht zuverlässig aus. Bricht spätestens nach ~2,8 s ab und gibt den letzten Stand
     /// zurück, auch wenn der Inhalt sich bis dahin nicht geändert hat.
     private func selectAndAwaitContent(_ index: Int, previousTexts: Set<String>) async throws -> AVRListInfo {
-        try await client.selectListItem(index)
+        let code = try await client.selectListItem(index)
+        netRadioLog("  response_code=\(code)")
         var info = try await client.getListInfo(input: "net_radio")
         var attempts = 0
         // Sowohl eine (noch) unveränderte Liste als auch eine leere Antwort (der AVR liefert bei
         // einer momentanen Fehlerantwort während des Nachladens gar keine Einträge) gelten als
         // "noch nicht bereit" und werden erneut abgefragt.
         while attempts < 8, info.listInfo.isEmpty || Set(info.listInfo.compactMap { $0.text }) == previousTexts {
+            netRadioLog("  Inhalt noch unverändert (Versuch \(attempts + 1)/8), warte...")
             try? await Task.sleep(nanoseconds: 350_000_000)
             info = try await client.getListInfo(input: "net_radio")
             attempts += 1
         }
         return info
+    }
+
+    /// Kehrt zuverlässig zur echten Wurzelebene des Net-Radio-Menüs zurück, bevor eine Navigation
+    /// beginnt. Der Menüzustand ist geräteseitig sitzungsübergreifend gespeichert – stand er noch
+    /// (z. B. durch eine unterbrochene vorherige Navigation, manuelle Bedienung am Gerät selbst
+    /// oder einen App-Neustart mitten in einer Aktion) irgendwo in einem Unterordner, würde die
+    /// Ordnersuche sonst von der falschen Stelle aus starten und einen falschen Navigationspfad
+    /// aufzeichnen bzw. abspielen (an einem echten Gerät genau so beobachtet).
+    private func returnToNetRadioRoot() async throws -> AVRListInfo {
+        // Bewusst eine feste Anzahl "return"-Aufrufe statt einer Prüfung "sind wir schon auf der
+        // Wurzelebene?": Eine transiente Fehlerantwort von getListInfo (keine menu_layer-Angabe,
+        // an einem echten Gerät beobachtet) ließe sich sonst fälschlich als "ja, schon dort"
+        // auslegen und den Rest der Navigation von der falschen Stelle aus starten lassen.
+        // "return" über die Wurzel hinaus ist harmlos (liefert lediglich eine Fehlerantwort).
+        for _ in 0..<4 {
+            _ = try? await client.returnList()
+        }
+        return try await client.getListInfo(input: "net_radio")
+    }
+
+    private func describe(_ list: AVRListInfo) -> String {
+        "layer=\(list.menuLayer.map(String.init) ?? "?") name=\(list.menuName ?? "?") items=\(list.listInfo.map { $0.text ?? "?" })"
+    }
+
+    private func netRadioLog(_ message: String) {
+        FileHandle.standardError.write(Data("YamahaAVRControl [NetRadio]: \(message)\n".utf8))
     }
 
     private func reportError(_ error: Error) {
