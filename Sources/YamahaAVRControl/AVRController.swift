@@ -209,22 +209,23 @@ final class AVRController: ObservableObject {
 
     // MARK: Aktionen
 
-    /// Wird von der Audiogeräte-Automatik aufgerufen: AVR einschalten (falls nötig) und danach
-    /// auf den angegebenen Eingang wechseln. Der AVR braucht nach dem Einschalten kurz Zeit,
-    /// bevor er weitere Befehle zuverlässig annimmt.
+    /// Wird von der Audiogeräte-Automatik aufgerufen: AVR einschalten und auf den angegebenen
+    /// Eingang wechseln. Tut bewusst nichts, wenn der AVR bereits an ist – läuft dort schon etwas
+    /// anderes (z. B. ein Film über HDMI), soll die Automatik das nicht durch einen Eingangswechsel
+    /// unterbrechen, nur weil am Mac zufällig dieses Ausgabegerät aktiv wurde.
     func turnOnAndSelectInput(_ input: String) {
         if settings.demoModeEnabled {
+            guard !demoPower else { return }
             demoPower = true
             if !input.isEmpty { demoInput = input }
             applyDemoState()
             return
         }
+        guard status?.power != "on" else { return }
         Task {
             do {
-                if status?.power != "on" {
-                    try await client.setPower(true)
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                }
+                try await client.setPower(true)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
                 // Eingang ist optional: Wenn in den Einstellungen keiner gewählt wurde, soll die
                 // Automatik den AVR trotzdem einschalten, statt komplett zu nichts zu tun.
                 if !input.isEmpty {

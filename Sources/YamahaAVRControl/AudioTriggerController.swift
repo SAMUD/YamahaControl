@@ -25,14 +25,15 @@ final class AudioTriggerController: NSObject, ObservableObject {
         // Direkt beim Start prüfen, falls der Mac schon auf das Zielgerät eingestellt ist.
         handleChange(monitor.currentDefaultOutputDevice())
 
-        // CoreAudio meldet beim Aufwachen aus dem Schlaf keine Änderung des Standard-
-        // Ausgabegeräts, wenn dieses schon vorher eingestellt war – der AVR selbst geht im
-        // Schlafmodus des Mac aber oft in Standby. Deshalb nach dem Aufwachen erneut prüfen und
-        // (falls weiterhin das Zielgerät aktiv ist) den AVR erneut einschalten.
+        // Bewusst screensDidWake statt didWake: macOS wacht während des Schlafs regelmäßig kurz
+        // für Hintergrundaufgaben auf ("Power Nap"/"dark wake", z. B. Time Machine, Mail-Abruf),
+        // wobei didWakeNotification ebenfalls feuert, der Bildschirm aber aus bleibt. Reagierte
+        // die App darauf, schaltete sich der AVR sporadisch während des Schlafs des Mac ein –
+        // screensDidWake feuert nur bei einem "echten", vom Nutzer bemerkten Aufwachen.
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(handleWake),
-            name: NSWorkspace.didWakeNotification,
+            selector: #selector(handleScreensWake),
+            name: NSWorkspace.screensDidWakeNotification,
             object: nil
         )
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -51,7 +52,14 @@ final class AudioTriggerController: NSObject, ObservableObject {
         availableAudioDevices = monitor.refreshDevices()
     }
 
-    @objc private func handleWake() {
+    @objc private func handleScreensWake() {
+        // Erzwingt hier (und nur hier, bei einem echten Aufwachen) einen erneuten Trigger, auch
+        // wenn das Zielgerät die ganze Zeit über als Standardausgabe eingestellt blieb – der AVR
+        // selbst geht im Schlafmodus des Mac oft in Standby, ohne dass sich an der
+        // macOS-Geräteauswahl etwas ändert. Absichtlich NICHT beim bloßen Schlafengehen
+        // zurückgesetzt, sonst würde ein vereinzeltes, während eines Dark Wake unverändert erneut
+        // gemeldetes CoreAudio-Ereignis fälschlich wie eine neue Geräteauswahl aussehen.
+        isCurrentlyOnTargetDevice = false
         handleChange(monitor.currentDefaultOutputDevice())
     }
 
@@ -63,9 +71,6 @@ final class AudioTriggerController: NSObject, ObservableObject {
            avrController?.status?.input == settings.triggerInput {
             avrController?.turnOff()
         }
-        // Erzwingt beim nächsten Aufwachen einen erneuten Trigger, auch wenn das Zielgerät die
-        // ganze Zeit über als Standardausgabe eingestellt blieb.
-        isCurrentlyOnTargetDevice = false
     }
 
     private func handleChange(_ device: AudioOutputMonitor.AudioDevice?) {
