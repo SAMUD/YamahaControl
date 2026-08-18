@@ -89,6 +89,16 @@ und reagiert auf Änderungen der macOS-Standardausgabe, nicht auf Anwesenheit im
 Netzwerk – das Zielgerät muss also tatsächlich in der macOS-Geräteliste als
 Audioausgabe wählbar sein.
 
+Während der Mac schläft (zwischen `willSleep` und einem echten, bildschirm-
+sichtbaren Aufwachen) wird jede vom System gemeldete Geräteänderung ignoriert –
+CoreAudio meldet gelegentlich unabhängig von jeder Wake-Notification kurzzeitig
+wieder das Zielgerät (z. B. wenn eine AirPlay-Route während eines kurzen
+„Dark Wake“ neu aufgebaut wird), was den AVR sonst mitten im Schlaf des Mac
+wieder eingeschaltet hätte. Sollte der AVR trotzdem noch spontan während des
+Schlafs angehen: In **Console.app** nach `YamahaAVRControl` filtern – jede
+Schlaf-/Wach-/Geräte-Änderung, die die Automatik sieht, wird dort protokolliert
+(`[AudioTrigger]: ...`), das zeigt genau, welches Ereignis den Auslöser gezogen hat.
+
 ## Hinweise zur YXC-API
 
 Alle Endpunkte in [AVRClient.swift](Sources/YamahaAVRControl/AVRClient.swift)
