@@ -12,10 +12,17 @@ final class AudioOutputMonitor {
         let name: String
     }
 
-    var onDefaultOutputChanged: ((AudioDevice?) -> Void)?
+    /// Wird aufgerufen, wenn sich das Standard-Ausgabegerät ändert oder wenn auf dem *aktuellen*
+    /// Standard-Ausgabegerät tatsächlich Ton zu laufen beginnt/aufhört. `isRunning` unterscheidet
+    /// "ist gerade als Standardausgabe ausgewählt" (passiert z. B. schon beim bloßen Einstecken
+    /// einer Dockingstation, ganz ohne dass etwas abgespielt wird) von "es läuft gerade wirklich
+    /// Audio darüber" (kAudioDevicePropertyDeviceIsRunningSomewhere).
+    var onOutputActivityChanged: ((AudioDevice?, Bool) -> Void)?
 
     private let systemObjectID = AudioObjectID(kAudioObjectSystemObject)
-    private var listenerBlock: AudioObjectPropertyListenerBlock?
+    private var defaultDeviceListenerBlock: AudioObjectPropertyListenerBlock?
+    private var runningListenerBlock: AudioObjectPropertyListenerBlock?
+    private var observedDeviceID: AudioDeviceID?
 
     init() {
         startListening()
@@ -54,6 +61,13 @@ final class AudioOutputMonitor {
         return AudioDevice(id: uid, name: deviceName(deviceID) ?? uid)
     }
 
+    /// Läuft gerade wirklich Ton auf dem aktuellen Standard-Ausgabegerät (nicht nur: ist es
+    /// ausgewählt)?
+    func currentDefaultOutputIsRunning() -> Bool {
+        guard let deviceID = defaultOutputDeviceID() else { return false }
+        return isRunning(deviceID)
+    }
+
     // MARK: Listener
 
     private func startListening() {
@@ -64,25 +78,77 @@ final class AudioOutputMonitor {
         )
 
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            guard let self else { return }
-            let device = self.currentDefaultOutputDevice()
             DispatchQueue.main.async {
-                self.onDefaultOutputChanged?(device)
+                self?.observeCurrentDefaultDevice()
             }
         }
-        listenerBlock = block
+        defaultDeviceListenerBlock = block
         AudioObjectAddPropertyListenerBlock(systemObjectID, &address, DispatchQueue.main, block)
+        observeCurrentDefaultDevice()
     }
 
     private func stopListening() {
-        guard let block = listenerBlock else { return }
+        if let block = defaultDeviceListenerBlock {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(systemObjectID, &address, DispatchQueue.main, block)
+            defaultDeviceListenerBlock = nil
+        }
+        removeRunningListener()
+    }
+
+    /// Hängt den "läuft gerade Ton"-Beobachter auf das aktuelle Standard-Ausgabegerät um (der
+    /// vorherige wird abgemeldet) und meldet den kombinierten Zustand einmal sofort.
+    private func observeCurrentDefaultDevice() {
+        removeRunningListener()
+        guard let deviceID = defaultOutputDeviceID() else {
+            onOutputActivityChanged?(nil, false)
+            return
+        }
+        observedDeviceID = deviceID
+
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        AudioObjectRemovePropertyListenerBlock(systemObjectID, &address, DispatchQueue.main, block)
-        listenerBlock = nil
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self, self.observedDeviceID == deviceID else { return }
+            DispatchQueue.main.async {
+                self.onOutputActivityChanged?(self.currentDefaultOutputDevice(), self.isRunning(deviceID))
+            }
+        }
+        runningListenerBlock = block
+        AudioObjectAddPropertyListenerBlock(deviceID, &address, DispatchQueue.main, block)
+
+        onOutputActivityChanged?(currentDefaultOutputDevice(), isRunning(deviceID))
+    }
+
+    private func removeRunningListener() {
+        guard let block = runningListenerBlock, let deviceID = observedDeviceID else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, block)
+        runningListenerBlock = nil
+        observedDeviceID = nil
+    }
+
+    private func isRunning(_ deviceID: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &running)
+        return status == noErr && running != 0
     }
 
     // MARK: Low-Level-Helfer

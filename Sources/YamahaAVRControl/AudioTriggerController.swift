@@ -27,11 +27,12 @@ final class AudioTriggerController: NSObject, ObservableObject {
         super.init()
         availableAudioDevices = monitor.refreshDevices()
 
-        monitor.onDefaultOutputChanged = { [weak self] device in
-            self?.handleChange(device)
+        monitor.onOutputActivityChanged = { [weak self] device, isRunning in
+            self?.handleChange(device, isRunning: isRunning)
         }
-        // Direkt beim Start prüfen, falls der Mac schon auf das Zielgerät eingestellt ist.
-        handleChange(monitor.currentDefaultOutputDevice())
+        // Direkt beim Start prüfen, falls der Mac schon auf das Zielgerät eingestellt ist und
+        // dort bereits aktiv etwas läuft.
+        handleChange(monitor.currentDefaultOutputDevice(), isRunning: monitor.currentDefaultOutputIsRunning())
 
         // Bewusst screensDidWake statt didWake: macOS wacht während des Schlafs regelmäßig kurz
         // für Hintergrundaufgaben auf ("Power Nap"/"dark wake", z. B. Time Machine, Mail-Abruf),
@@ -70,7 +71,7 @@ final class AudioTriggerController: NSObject, ObservableObject {
         // gemeldetes CoreAudio-Ereignis fälschlich wie eine neue Geräteauswahl aussehen.
         isAsleep = false
         isCurrentlyOnTargetDevice = false
-        handleChange(monitor.currentDefaultOutputDevice())
+        handleChange(monitor.currentDefaultOutputDevice(), isRunning: monitor.currentDefaultOutputIsRunning())
     }
 
     @objc private func handleSleep() {
@@ -85,7 +86,7 @@ final class AudioTriggerController: NSObject, ObservableObject {
         }
     }
 
-    private func handleChange(_ device: AudioOutputMonitor.AudioDevice?) {
+    private func handleChange(_ device: AudioOutputMonitor.AudioDevice?, isRunning: Bool) {
         // Während des Schlafs komplett ignorieren: CoreAudio meldet gelegentlich unabhängig von
         // jeder Wake-Notification (z. B. bei einer kurz neu aufgebauten AirPlay-Route während
         // eines Dark Wake) das Zielgerät erneut als Default, obwohl der Mac weiterhin schläft. Der
@@ -99,9 +100,13 @@ final class AudioTriggerController: NSObject, ObservableObject {
             return
         }
 
-        let matchesTarget = device?.id == settings.triggerDeviceUID
+        // Bewusst nicht schon auslösen, sobald das Zielgerät nur als Standardausgabe ausgewählt
+        // ist – das passiert z. B. schon beim bloßen Einstecken einer Dockingstation zum Laden,
+        // ganz ohne dass etwas abgespielt wird. Erst wenn dort tatsächlich Ton läuft
+        // (kAudioDevicePropertyDeviceIsRunningSomewhere), heißt das "der Nutzer macht aktiv etwas".
+        let matchesTarget = device?.id == settings.triggerDeviceUID && isRunning
         if matchesTarget && !isCurrentlyOnTargetDevice {
-            logTrigger("Zielgerät aktiv (\(device?.name ?? "?")) – schalte AVR ein")
+            logTrigger("Zielgerät aktiv am Spielen (\(device?.name ?? "?")) – schalte AVR ein")
             avrController?.turnOnAndSelectInput(settings.triggerInput)
         }
         isCurrentlyOnTargetDevice = matchesTarget
