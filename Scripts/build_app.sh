@@ -24,5 +24,19 @@ cp ".build/release/YamahaAVRControl" "$APP_NAME/Contents/MacOS/YamahaAVRControl"
 cp "Scripts/Info.plist" "$APP_NAME/Contents/Info.plist"
 cp "Scripts/AppIcon.icns" "$APP_NAME/Contents/Resources/AppIcon.icns"
 
+# Mit einem stabilen (selbstsignierten) Zertifikat signieren, falls eines im Schlüsselbund
+# vorhanden ist – ohne das würde macOS jeden Neubau als "neue" App behandeln und Berechtigungen
+# wie "Eingabeüberwachung" (für die Lautstärke-Tastenkombination) müssten nach jedem Rebuild neu
+# erteilt werden. Zertifikat erzeugen: siehe Scripts/create_dev_cert.sh.
+SIGN_IDENTITY="YamahaAVRControl Dev"
+if security find-certificate -c "$SIGN_IDENTITY" >/dev/null 2>&1; then
+    codesign --force --sign "$SIGN_IDENTITY" "$APP_NAME"
+    echo "Signiert mit \"$SIGN_IDENTITY\"."
+else
+    echo "Hinweis: Kein Zertifikat \"$SIGN_IDENTITY\" gefunden – App bleibt unsigniert."
+    echo "Ohne Signatur muss z. B. die Eingabeüberwachungs-Berechtigung nach jedem Rebuild neu erteilt werden."
+    echo "Zum Einrichten: ./Scripts/create_dev_cert.sh"
+fi
+
 echo "Fertig: $APP_NAME"
 echo "Weiter mit: open \"$APP_NAME\" oder ins Applications-Verzeichnis verschieben."

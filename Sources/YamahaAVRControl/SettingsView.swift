@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var controller: AVRController
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var audioTrigger: AudioTriggerController
+    @EnvironmentObject var volumeShortcuts: VolumeShortcutController
     @State private var hostDraft: String = ""
 
     var body: some View {
@@ -109,10 +110,56 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                sectionHeader("Tastenkombination für Lautstärke")
+                Toggle("Aktiv", isOn: $settings.volumeShortcutsEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .font(.system(size: 12))
+                    .onChange(of: settings.volumeShortcutsEnabled) { enabled in
+                        if enabled { VolumeShortcutMonitor.requestAccessibilityIfNeeded() }
+                        volumeShortcuts.applyEnabledState()
+                    }
+
+                shortcutRecorderRow(label: "Lauter", up: true)
+                shortcutRecorderRow(label: "Leiser", up: false)
+
+                Stepper("Schrittweite: \(settings.volumeShortcutStepDB, specifier: "%.1f") dB",
+                        value: $settings.volumeShortcutStepDB, in: 0.5...6.0, step: 0.5)
+                    .font(.system(size: 12))
+
+                Text("Systemweit, unabhängig von den normalen Mac-Lautstärketasten. Braucht einmalig die Berechtigung „Eingabeüberwachung“ (Systemeinstellungen ▸ Datenschutz & Sicherheit) – dort ggf. YamahaAVRControl aktivieren und die App neu starten. Klappt die Aufnahme nicht (kein Reagieren auf Tastendruck), fängt vermutlich eine andere App (Fenstermanager, Tastatursoftware) die Kombination vorher ab – dann eine andere probieren.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onAppear { hostDraft = settings.avrHost }
+    }
+
+    private func shortcutRecorderRow(label: String, up: Bool) -> some View {
+        let combo = up ? settings.volumeUpCombo : settings.volumeDownCombo
+        let recording = volumeShortcuts.isRecording == up
+        return HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12))
+                .frame(width: 50, alignment: .leading)
+
+            Text(recording ? "Drücke eine Taste…" : (combo?.displayString ?? "Nicht festgelegt"))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(recording ? Color.accentColor : (combo == nil ? Color.secondary : Color.primary))
+                .frame(minWidth: 90, alignment: .leading)
+
+            if recording {
+                Button("Abbrechen") { volumeShortcuts.cancelRecording() }
+                    .controlSize(.small)
+            } else {
+                Button("Aufnehmen") { volumeShortcuts.startRecording(up: up) }
+                    .controlSize(.small)
+            }
+        }
     }
 
     private func sectionHeader(_ text: String) -> some View {
