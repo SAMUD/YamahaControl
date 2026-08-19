@@ -78,16 +78,20 @@ einstellbar) die Erreichbarkeit des AVR und zeigt Status/Bedienung im Flyout.
 
 In den Einstellungen ▸ „Automatisch einschalten“ lässt sich ein macOS-Audioausgabe­gerät
 auswählen (z. B. wenn der AVR selbst als AirPlay-2-, USB- oder HDMI-Ziel im
-Lautsprecher-Menü von macOS erscheint) sowie ein Ziel-Eingang. Stellst du am Mac
-dieses Gerät als Standard-Audioausgabe ein, schaltet die App den AVR automatisch
-ein und wechselt auf den gewählten Eingang – auch wenn das Gerät bereits beim
-App-Start aktiv ist oder der Mac gerade erst aus dem Ruhezustand aufwacht. Geht
-der Mac in den Ruhezustand, während der AVR auf genau diesem Eingang steht,
-schaltet die App ihn automatisch wieder aus. Die Erkennung läuft über CoreAudio
-([AudioOutputMonitor.swift](Sources/YamahaAVRControl/AudioOutputMonitor.swift))
-und reagiert auf Änderungen der macOS-Standardausgabe, nicht auf Anwesenheit im
-Netzwerk – das Zielgerät muss also tatsächlich in der macOS-Geräteliste als
-Audioausgabe wählbar sein.
+Lautsprecher-Menü von macOS erscheint) sowie ein Ziel-Eingang. Schaltet die App den AVR
+automatisch ein und wechselt auf den gewählten Eingang, sobald auf diesem Gerät tatsächlich
+Ton **abgespielt** wird – auch wenn das Gerät bereits beim App-Start aktiv ist oder der Mac
+gerade erst aus dem Ruhezustand aufwacht. Bewusst nicht schon beim bloßen Auswählen des
+Geräts als Standardausgabe: Manche Dockingstations wählen sich beim Einstecken (z. B. nur
+zum Laden) automatisch als Standard-Audioausgabe, ganz ohne dass etwas läuft – das soll den
+AVR nicht grundlos einschalten. Erkannt wird das über
+`kAudioDevicePropertyDeviceIsRunningSomewhere` in CoreAudio
+([AudioOutputMonitor.swift](Sources/YamahaAVRControl/AudioOutputMonitor.swift)). Läuft der
+AVR bereits, schaltet die Automatik ihn auch nicht auf einen anderen Eingang um – läuft dort
+schon etwas anderes, wird das nicht unterbrochen.
+
+Geht der Mac in den Ruhezustand, während der AVR auf genau diesem Eingang steht, schaltet
+die App ihn automatisch wieder aus.
 
 Während der Mac schläft (zwischen `willSleep` und einem echten, bildschirm-
 sichtbaren Aufwachen) wird jede vom System gemeldete Geräteänderung ignoriert –
@@ -117,6 +121,11 @@ sind an einem echten RX-A2070 verifiziert, u. a.:
   Sollte sich die Menüstruktur deines Receivers/Anbieters unterscheiden, im
   Browser `http://<AVR-IP>/YamahaExtendedControl/v1/netusb/getListInfo?list_id=main&input=net_radio&index=0&size=8&lang=de`
   öffnen, um die tatsächliche Struktur zu sehen.
+- **`netusb/setListControl`** kennt drei `type`-Werte: `select` (in einen
+  Ordner navigieren bzw. einen Eintrag markieren – startet **keine**
+  Wiedergabe, auch nicht bei einem Sender/Titel), `play` (Wiedergabe
+  tatsächlich starten) und `return` (eine Ebene zurück). Für das Abspielen
+  eines Senders wird daher `type=play` gebraucht, nicht `select`.
 
 ## Alternative bzw. ergänzende Steuerungsmöglichkeiten unter macOS
 
