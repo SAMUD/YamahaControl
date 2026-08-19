@@ -6,6 +6,7 @@ struct YamahaAVRControlApp: App {
     @StateObject private var settings: SettingsStore
     @StateObject private var controller: AVRController
     @StateObject private var audioTrigger: AudioTriggerController
+    @StateObject private var volumeShortcuts: VolumeShortcutController
     /// Muss für die Lebensdauer der App gehalten werden, sonst greift App Nap wieder. Ohne das
     /// hier drosselt macOS die Hintergrund-Timer dieser Menüleisten-App (kein sichtbares Fenster,
     /// nie im Vordergrund), sodass der periodische AVR-Status-Poll teils erst nach sehr langer
@@ -25,10 +26,12 @@ struct YamahaAVRControlApp: App {
         let avrController = AVRController(settings: settingsStore)
         avrController.nowPlayingBridge = NowPlayingBridge(controller: avrController)
         let triggerController = AudioTriggerController(settings: settingsStore, avrController: avrController)
+        let volumeShortcutController = VolumeShortcutController(settings: settingsStore, avrController: avrController)
 
         _settings = StateObject(wrappedValue: settingsStore)
         _controller = StateObject(wrappedValue: avrController)
         _audioTrigger = StateObject(wrappedValue: triggerController)
+        _volumeShortcuts = StateObject(wrappedValue: volumeShortcutController)
 
         // Läuft als reine Menüleisten-App ohne Dock-Icon/Programmwechsler-Eintrag.
         // (Bei Auslieferung als .app-Bundle übernimmt zusätzlich LSUIElement in Info.plist diese Rolle.)
@@ -41,6 +44,7 @@ struct YamahaAVRControlApp: App {
                 .environmentObject(controller)
                 .environmentObject(settings)
                 .environmentObject(audioTrigger)
+                .environmentObject(volumeShortcuts)
         } label: {
             MenuBarIconView(controller: controller)
         }

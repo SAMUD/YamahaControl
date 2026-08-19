@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 final class SettingsStore: ObservableObject {
     @Published var avrHost: String {
@@ -35,6 +36,41 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(demoModeEnabled, forKey: "demoModeEnabled") }
     }
 
+    /// Systemweite, vom Nutzer selbst aufgenommene Tastenkombination zur Lautstärkesteuerung –
+    /// eigene Kombination, nicht die physischen Mac-Lautstärketasten. Braucht die Berechtigung
+    /// „Eingabeüberwachung“. `nil` = nicht festgelegt.
+    @Published var volumeShortcutsEnabled: Bool {
+        didSet { UserDefaults.standard.set(volumeShortcutsEnabled, forKey: "volumeShortcutsEnabled") }
+    }
+    @Published var volumeUpCombo: KeyCombo? {
+        didSet { saveCombo(volumeUpCombo, keyKey: "volumeUpKeyCode", flagsKey: "volumeUpFlags") }
+    }
+    @Published var volumeDownCombo: KeyCombo? {
+        didSet { saveCombo(volumeDownCombo, keyKey: "volumeDownKeyCode", flagsKey: "volumeDownFlags") }
+    }
+    /// Lautstärkeänderung pro Tastendruck, in dB.
+    @Published var volumeShortcutStepDB: Double {
+        didSet { UserDefaults.standard.set(volumeShortcutStepDB, forKey: "volumeShortcutStepDB") }
+    }
+
+    private func saveCombo(_ combo: KeyCombo?, keyKey: String, flagsKey: String) {
+        let defaults = UserDefaults.standard
+        if let combo {
+            defaults.set(Int(combo.keyCode), forKey: keyKey)
+            defaults.set(combo.modifierFlags.rawValue, forKey: flagsKey)
+        } else {
+            defaults.removeObject(forKey: keyKey)
+            defaults.removeObject(forKey: flagsKey)
+        }
+    }
+
+    private static func loadCombo(keyKey: String, flagsKey: String) -> KeyCombo? {
+        let defaults = UserDefaults.standard
+        guard let keyCode = defaults.object(forKey: keyKey) as? Int else { return nil }
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(defaults.integer(forKey: flagsKey)))
+        return KeyCombo(keyCode: UInt16(keyCode), modifierFlags: flags)
+    }
+
     init() {
         avrHost = UserDefaults.standard.string(forKey: "avrHost") ?? ""
         pollIntervalSeconds = UserDefaults.standard.object(forKey: "pollIntervalSeconds") as? Double ?? 5
@@ -45,5 +81,9 @@ final class SettingsStore: ObservableObject {
         triggerDeviceUID = UserDefaults.standard.string(forKey: "triggerDeviceUID") ?? ""
         triggerInput = UserDefaults.standard.string(forKey: "triggerInput") ?? ""
         demoModeEnabled = UserDefaults.standard.bool(forKey: "demoModeEnabled")
+        volumeShortcutsEnabled = UserDefaults.standard.bool(forKey: "volumeShortcutsEnabled")
+        volumeUpCombo = Self.loadCombo(keyKey: "volumeUpKeyCode", flagsKey: "volumeUpFlags")
+        volumeDownCombo = Self.loadCombo(keyKey: "volumeDownKeyCode", flagsKey: "volumeDownFlags")
+        volumeShortcutStepDB = UserDefaults.standard.object(forKey: "volumeShortcutStepDB") as? Double ?? 0.5
     }
 }

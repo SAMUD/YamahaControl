@@ -36,6 +36,11 @@ final class AVRController: ObservableObject {
     private var client: AVRClient
     private var pollTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
+    /// Zuletzt per `setVolumePercent` *angefragte* (nicht zwangsläufig vom AVR schon bestätigte)
+    /// Roh-Lautstärke. Basis für `adjustVolumeByDB`, damit sich schnell aufeinanderfolgende
+    /// Tastendrücke richtig aufaddieren statt wegen des Sende-Debounce vom selben, noch nicht
+    /// bestätigten Stand auszugehen.
+    private var lastRequestedRawVolume: Int?
     /// Anzahl aufeinanderfolgender fehlgeschlagener Abfragen. Erst nach mehreren Fehlschlägen in
     /// Folge wird "nicht erreichbar" angezeigt, damit ein einzelner verlorener Request (z. B.
     /// während der AVR gerade eine andere Anfrage verarbeitet) nicht sofort zum Flackern führt.
@@ -301,6 +306,7 @@ final class AVRController: ObservableObject {
         let maxV = status?.maxVolume ?? Int(features?.mainVolumeRange?.max ?? 100)
         let clamped = min(max(pct, 0), 1)
         let target = Int((clamped * Double(maxV)).rounded())
+        lastRequestedRawVolume = target
         if settings.demoModeEnabled {
             demoVolume = target
             applyDemoState()
@@ -321,6 +327,25 @@ final class AVRController: ObservableObject {
                 if !Task.isCancelled { self.reportError(error) }
             }
         }
+    }
+
+    /// Ändert die Lautstärke um den angegebenen dB-Betrag (positiv = lauter, negativ = leiser) –
+    /// für die eigene Tastenkombination (⌃⌥↑/⌃⌥↓). Rechnet den dB-Wert über die vom AVR
+    /// gemeldete dB-pro-Stufe-Auflösung (`actual_volume_db` aus getFeatures, an einem echten
+    /// RX-A2070 verifiziert: 0,5 dB je Roh-Lautstärke-Einheit) in Roh-Lautstärke-Einheiten um.
+    /// Rechnet dabei vom zuletzt *angefragten* statt zuletzt *bestätigten* Wert weiter, damit
+    /// schnell aufeinanderfolgende Tastendrücke (gehaltene Taste) sich richtig aufaddieren,
+    /// statt wegen des Sende-Debounce mehrfach vom selben veralteten Stand auszugehen.
+    func adjustVolumeByDB(_ deltaDB: Double) {
+        let maxV = status?.maxVolume ?? Int(features?.mainVolumeRange?.max ?? 100)
+        guard maxV > 0 else { return }
+        let base = lastRequestedRawVolume ?? status?.volume ?? 0
+        let dbPerRawUnit = features?.mainZone?.rangeSteps?.first(where: { $0.id == "actual_volume_db" })?.step ?? 0.5
+        guard dbPerRawUnit > 0 else { return }
+        let rawStep = max(1, Int((abs(deltaDB) / dbPerRawUnit).rounded()))
+        let signedStep = deltaDB >= 0 ? rawStep : -rawStep
+        let newRaw = min(max(base + signedStep, 0), maxV)
+        setVolumePercent(Double(newRaw) / Double(maxV), immediate: false)
     }
 
     func toggleMute() {
